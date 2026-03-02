@@ -1,7 +1,30 @@
 {
   "expo": {
-    "name": "expense",
+    "name": "FinVerse",
     "slug": "expense",
-    "version": "1.0.0"
+    "version": "1.0.0",
+    "android": {
+      "package": "com.abs.finverse",
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0F19"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.abs.finverse"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow FinVerse to access your camera to scan UPI QR codes."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "49a9f946-b180-4ece-8b8b-9b7fb57fcef3"
+      }
+    }
   }
 }
