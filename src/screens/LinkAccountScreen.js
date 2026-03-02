@@ -18,13 +18,15 @@ export default function LinkAccountScreen({ navigation }) {
   const [isWaitingForChild, setIsWaitingForChild] = useState(false);
   const [loading, setLoading] = useState(false);
   const [currentUserData, setCurrentUserData] = useState(null);
+  const [childAccountExists, setChildAccountExists] = useState(true); // Track if child account still exists
+  const [checkingChild, setCheckingChild] = useState(false);
 
   // Listen to current user document for live handshake updates
   useEffect(() => {
     if (!auth.currentUser) return;
     const userRef = doc(db, 'users', auth.currentUser.uid);
     
-    const unsubscribe = onSnapshot(userRef, (docSnap) => {
+    const unsubscribe = onSnapshot(userRef, async (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         setCurrentUserData(data);
@@ -35,7 +37,38 @@ export default function LinkAccountScreen({ navigation }) {
             setIsWaitingForChild(false);
             Alert.alert("Success!", "The child has accepted your link request.");
           }
-          navigation.replace('ChildReport', { childId: data.linkedChild });
+          
+          // Check if child account still exists before navigating
+          setCheckingChild(true);
+          try {
+            const childRef = doc(db, 'users', data.linkedChild);
+            const childSnap = await getDoc(childRef);
+            
+            if (childSnap.exists()) {
+              // Child exists - navigate normally
+              setChildAccountExists(true);
+              navigation.replace('ChildReport', { childId: data.linkedChild });
+            } else {
+              // Child account was deleted - clean up and show message
+              setChildAccountExists(false);
+              await updateDoc(userRef, { 
+                linkedChild: null,
+                // Also clear any other related fields if they exist
+                pendingParentRequest: null,
+                pendingParentName: null
+              });
+              Alert.alert(
+                "Account Disconnected",
+                "The linked child account has been deleted. The link has been removed from your account.",
+                [{ text: "OK" }]
+              );
+            }
+          } catch (error) {
+            console.error("Error checking child account:", error);
+            Alert.alert("Error", "Failed to verify child account status.");
+          } finally {
+            setCheckingChild(false);
+          }
           return;
         }
 
@@ -80,6 +113,10 @@ export default function LinkAccountScreen({ navigation }) {
           );
         }
       }
+    }, (error) => {
+      // Handle any snapshot errors
+      console.error("Snapshot error:", error);
+      Alert.alert("Error", "Failed to sync account data.");
     });
 
     return () => unsubscribe();
@@ -100,7 +137,16 @@ export default function LinkAccountScreen({ navigation }) {
       const childSnap = await getDoc(childRef);
       
       if (!childSnap.exists()) {
-        Alert.alert("Error", "Invalid QR Code. Child account not found.");
+        Alert.alert("Error", "Invalid QR Code. Child account not found or has been deleted.");
+        setScanned(false);
+        setLoading(false);
+        return;
+      }
+
+      // Check if child already has a linked parent
+      const childData = childSnap.data();
+      if (childData.linkedParent) {
+        Alert.alert("Error", "This child account is already linked to another parent.");
         setScanned(false);
         setLoading(false);
         return;
@@ -114,7 +160,7 @@ export default function LinkAccountScreen({ navigation }) {
 
       setIsWaitingForChild(true);
     } catch (error) {
-      Alert.alert("Scan Error", "Failed to process QR code.");
+      Alert.alert("Scan Error", "Failed to process QR code. Please try again.");
       setScanned(false);
     }
     setLoading(false);
@@ -127,13 +173,46 @@ export default function LinkAccountScreen({ navigation }) {
         text: "Unlink", 
         style: "destructive", 
         onPress: async () => {
-          const parentRef = doc(db, 'users', currentUserData.linkedParent);
-          await updateDoc(doc(db, 'users', auth.currentUser.uid), { linkedParent: null });
-          await updateDoc(parentRef, { linkedChild: null });
-          setRole(null);
+          try {
+            const parentRef = doc(db, 'users', currentUserData.linkedParent);
+            await updateDoc(doc(db, 'users', auth.currentUser.uid), { linkedParent: null });
+            await updateDoc(parentRef, { linkedChild: null });
+            setRole(null);
+            Alert.alert("Success", "Account unlinked successfully.");
+          } catch (error) {
+            Alert.alert("Error", "Failed to unlink account.");
+          }
         }
       }
     ]);
+  };
+
+  const handleRefreshLink = async () => {
+    if (!currentUserData?.linkedParent) return;
+    
+    setCheckingChild(true);
+    try {
+      const parentRef = doc(db, 'users', currentUserData.linkedParent);
+      const parentSnap = await getDoc(parentRef);
+      
+      if (!parentSnap.exists()) {
+        // Parent account deleted - clean up
+        await updateDoc(doc(db, 'users', auth.currentUser.uid), { 
+          linkedParent: null 
+        });
+        setRole(null);
+        Alert.alert(
+          "Parent Account Deleted",
+          "Your parent account no longer exists. The link has been removed."
+        );
+      } else {
+        Alert.alert("Info", "Parent account is active and linked.");
+      }
+    } catch (error) {
+      Alert.alert("Error", "Failed to check parent account status.");
+    } finally {
+      setCheckingChild(false);
+    }
   };
 
   // UI FOR ALREADY LINKED CHILD
@@ -145,7 +224,9 @@ export default function LinkAccountScreen({ navigation }) {
             <Ionicons name="arrow-back" size={28} color="#FFF" />
           </TouchableOpacity>
           <Text style={styles.title}>Connection Status</Text>
-          <View style={{width: 28}} />
+          <TouchableOpacity onPress={handleRefreshLink} disabled={checkingChild}>
+            <Ionicons name="refresh" size={24} color={checkingChild ? '#475569' : '#00E5FF'} />
+          </TouchableOpacity>
         </View>
 
         <View style={styles.centerContainer}>
@@ -153,9 +234,25 @@ export default function LinkAccountScreen({ navigation }) {
           <Text style={[styles.subtitle, { marginTop: 20 }]}>Securely Linked</Text>
           <Text style={styles.roleDesc}>Your account is currently linked. Your parent can view your transactions to help you manage your finances.</Text>
           
+          {checkingChild && (
+            <ActivityIndicator size="large" color="#00E5FF" style={{marginTop: 20}} />
+          )}
+          
           {/* <TouchableOpacity style={styles.unlinkBtn} onPress={handleUnlink}>
             <Text style={styles.unlinkBtnText}>Revoke Parent Access</Text>
           </TouchableOpacity> */}
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Show loading while checking child account
+  if (checkingChild) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.centerContainer}>
+          <ActivityIndicator size="large" color="#00E5FF" />
+          <Text style={[styles.waitingDesc, { marginTop: 20 }]}>Verifying account status...</Text>
         </View>
       </SafeAreaView>
     );
@@ -227,6 +324,16 @@ export default function LinkAccountScreen({ navigation }) {
               <Text style={styles.waitingTitle}>Request Sent!</Text>
               <Text style={styles.waitingDesc}>Please ask the child to tap "Accept" on their phone to complete the link.</Text>
               <ActivityIndicator size="large" color="#00E5FF" style={{marginTop: 30}} />
+              
+              <TouchableOpacity 
+                style={styles.cancelRequestBtn} 
+                onPress={() => {
+                  setIsWaitingForChild(false);
+                  setScanned(false);
+                  setRole(null);
+                }}>
+                <Text style={styles.cancelRequestText}>Cancel Request</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             <>
@@ -238,11 +345,28 @@ export default function LinkAccountScreen({ navigation }) {
                   onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
                 />
               ) : (
-                <Text style={{color: 'red'}}>No camera access</Text>
+                <View style={styles.centerContainer}>
+                  <Text style={{color: '#94A3B8', marginBottom: 20}}>Camera permission is required</Text>
+                  <TouchableOpacity style={styles.permissionBtn} onPress={requestPermission}>
+                    <Text style={styles.permissionBtnText}>Grant Permission</Text>
+                  </TouchableOpacity>
+                </View>
               )}
               <View style={styles.overlay}>
                 <View style={styles.scannerOutline} />
                 <Text style={styles.scanText}>ALIGN CHILD'S QR CODE HERE</Text>
+                
+                {scanned && !loading && (
+                  <TouchableOpacity 
+                    style={styles.scanAgainBtn} 
+                    onPress={() => setScanned(false)}>
+                    <Text style={styles.scanAgainText}>Tap to Scan Again</Text>
+                  </TouchableOpacity>
+                )}
+                
+                {loading && (
+                  <ActivityIndicator size="large" color="#00E5FF" style={{marginTop: 20}} />
+                )}
               </View>
             </>
           )}
@@ -272,11 +396,19 @@ const styles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(11, 15, 25, 0.6)', justifyContent: 'center', alignItems: 'center' },
   scannerOutline: { width: 250, height: 250, borderWidth: 2, borderColor: '#00E5FF', borderRadius: 20 },
   scanText: { color: '#00E5FF', marginTop: 30, fontWeight: 'bold', letterSpacing: 1 },
+  scanAgainBtn: { marginTop: 20, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: '#1E293B', borderRadius: 8 },
+  scanAgainText: { color: '#00E5FF', fontSize: 14 },
 
   waitingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 30 },
   waitingTitle: { fontSize: 24, color: '#00E5FF', fontWeight: 'bold', marginTop: 20, marginBottom: 10 },
   waitingDesc: { color: '#94A3B8', textAlign: 'center', fontSize: 16, lineHeight: 24 },
 
   unlinkBtn: { marginTop: 40, paddingHorizontal: 24, paddingVertical: 16, borderRadius: 12, backgroundColor: 'rgba(239, 68, 68, 0.1)', borderWidth: 1, borderColor: '#EF4444' },
-  unlinkBtnText: { color: '#EF4444', fontWeight: 'bold', fontSize: 16 }
+  unlinkBtnText: { color: '#EF4444', fontWeight: 'bold', fontSize: 16 },
+
+  permissionBtn: { backgroundColor: '#00E5FF', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
+  permissionBtnText: { color: '#0B0F19', fontWeight: 'bold', fontSize: 14 },
+
+  cancelRequestBtn: { marginTop: 30, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8, backgroundColor: 'rgba(239, 68, 68, 0.1)' },
+  cancelRequestText: { color: '#EF4444', fontWeight: 'bold', fontSize: 14 },
 });
