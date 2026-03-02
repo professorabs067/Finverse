@@ -15,7 +15,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 const screenWidth = Dimensions.get('window').width;
-const GEMINI_API_KEY = "AIzaSyDgq1MsYJ_eoylSyJ9sWdozu9yYtMNbkZ0"; // ⚠️ PASTE YOUR KEY HERE
+const GEMINI_API_KEY = "AIzaSyDn3CQWDczkph14EU4kTQpwbeSjqFR944s"; // ⚠️ PASTE YOUR KEY HERE
 
 const CATEGORY_MAP = {
   'Food & Dining': { icon: 'hamburger', color: '#F59E0B' },

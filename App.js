@@ -19,6 +19,7 @@ import ScannerScreen from './src/screens/ScannerScreen';
 import StatsScreen from './src/screens/StatsScreen';
 import BudgetScreen from './src/screens/BudgetScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
+import HistoryScreen from './src/screens/HistoryScreen'; // <-- NEW: Imported History Screen
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -91,9 +92,20 @@ export default function App() {
                   title: 'Scan & Pay', 
                   headerStyle: { backgroundColor: '#0B0F19'}, 
                   headerTintColor: '#FFF',
-                  animation: 'none' // <--- THIS KILLS THE TRANSITION DELAY
+                  animation: 'none' 
                 }} 
               />
+
+              {/* NEW: History Screen for PDF Exports */}
+              <Stack.Screen 
+                name="History" 
+                component={HistoryScreen} 
+                options={{ 
+                  headerShown: false, // Hidden because HistoryScreen has its own custom back button and header
+                  animation: 'none' 
+                }} 
+              />
+
             </Stack.Navigator>
           </NavigationContainer>
         </FinanceContext.Provider>

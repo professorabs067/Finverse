@@ -1,8 +1,7 @@
-import React, { useState, useContext, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, TextInput, TouchableOpacity, Alert, Linking, ActivityIndicator, ScrollView, Switch, LayoutAnimation, UIManager, Platform } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Ionicons } from '@expo/vector-icons';
-import { FinanceContext } from '../context/FinanceContext';
 
 // Import Firebase
 import { auth, db } from '../config/firebase';
@@ -20,10 +19,11 @@ const CATEGORIES = [
 
 export default function ScannerScreen({ navigation }) {
   const [permission, requestPermission] = useCameraPermissions();
-  const [scannedUpi, setScannedUpi] = useState(null);
+  const [scannedUpiId, setScannedUpiId] = useState(null);
   const [payeeName, setPayeeName] = useState('Unknown Merchant');
   
   const [amount, setAmount] = useState('');
+  const [isAmountLocked, setIsAmountLocked] = useState(false); // NEW: For fixed-price QR codes
   const [reason, setReason] = useState('');
   const [category, setCategory] = useState('Transfers');
   const [isSubscription, setIsSubscription] = useState(false);
@@ -57,32 +57,57 @@ export default function ScannerScreen({ navigation }) {
     );
   }
 
+  // Helper function to safely extract URL parameters
+  const getUpiParam = (url, paramName) => {
+    const regex = new RegExp(`[?&]${paramName}(=([^&#]*)|&|#|$)`);
+    const results = regex.exec(url);
+    if (!results || !results[2]) return null;
+    return decodeURIComponent(results[2].replace(/\+/g, ' '));
+  };
+
   const handleBarCodeScanned = ({ data }) => {
-    if (data.includes('upi://pay')) {
+    // 1. Validate the protocol
+    if (!data || !data.toLowerCase().startsWith('upi://pay')) {
+      return Alert.alert('Security Alert', 'Invalid QR code. This is not a recognized UPI format.');
+    }
+
+    try {
+      // 2. Safely extract parameters
+      const extractedPa = getUpiParam(data, 'pa');
+      const extractedPn = getUpiParam(data, 'pn');
+      const extractedAm = getUpiParam(data, 'am');
+      
+      // 3. Strict VPA (UPI ID) Validation
+      if (!extractedPa || !extractedPa.includes('@')) {
+        return Alert.alert('Security Alert', 'This QR code is missing a valid merchant UPI ID.');
+      }
+
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      setScannedUpi(data);
       
-      const queryString = data.split('?')[1];
-      const urlParams = new URLSearchParams(queryString);
-      
-      if (urlParams.has('pn')) {
-        setPayeeName(decodeURIComponent(urlParams.get('pn')));
+      setScannedUpiId(extractedPa);
+      setPayeeName(extractedPn || 'Verified Merchant');
+
+      // 4. Handle fixed-amount dynamic QR codes
+      if (extractedAm) {
+        setAmount(extractedAm);
+        setIsAmountLocked(true); // Prevent user from changing the exact bill amount
+      } else {
+        setAmount('');
+        setIsAmountLocked(false);
       }
-      
-      if (urlParams.get('mode') === '04' || urlParams.get('purpose') === '14') {
-        setIsSubscription(true);
-      }
-    } else {
-      Alert.alert('Invalid QR', 'Please scan a valid UPI QR code.');
+
+    } catch (error) {
+      Alert.alert('Scan Error', 'Could not process this QR code safely.');
     }
   };
 
   const executePayment = async () => {
-    if (!amount) return Alert.alert('Error', 'Please enter an amount.');
+    if (!amount || isNaN(parseFloat(amount))) return Alert.alert('Error', 'Please enter a valid amount.');
     setIsProcessing(true);
 
-    const finalReason = reason || payeeName; // Fallback to merchant name if reason is blank
-    const finalUrl = `upi://pay?pa=${scannedUpi.split('pa=')[1].split('&')[0]}&pn=${encodeURIComponent(payeeName)}&am=${amount}&cu=INR&tn=${encodeURIComponent(finalReason)}`;
+    const finalReason = reason || `Paid ${payeeName}`; 
+    // Securely construct the final intent URI using validated state data
+    const finalUrl = `upi://pay?pa=${scannedUpiId}&pn=${encodeURIComponent(payeeName)}&am=${amount}&cu=INR&tn=${encodeURIComponent(finalReason)}`;
     
     try {
       await Linking.openURL(finalUrl);
@@ -97,7 +122,7 @@ export default function ScannerScreen({ navigation }) {
               style: "cancel", 
               onPress: () => {
                 setIsProcessing(false);
-                setScannedUpi(null); 
+                setScannedUpiId(null); 
               } 
             },
             { 
@@ -137,14 +162,24 @@ export default function ScannerScreen({ navigation }) {
     }
   };
 
-  if (scannedUpi) {
+  if (scannedUpiId) {
     return (
       <View style={styles.paymentContainer}>
         <Text style={styles.title}>Authorize Payment</Text>
         <Text style={styles.subtitle}>Paying: <Text style={styles.highlight}>{payeeName}</Text></Text>
 
         <Text style={styles.label}>AMOUNT (₹)</Text>
-        <TextInput style={styles.input} keyboardType="numeric" placeholder="0.00" placeholderTextColor="#475569" value={amount} onChangeText={setAmount} autoFocus />
+        <TextInput 
+          style={[styles.input, isAmountLocked && { color: '#10B981', borderColor: '#10B981' }]} 
+          keyboardType="numeric" 
+          placeholder="0.00" 
+          placeholderTextColor="#475569" 
+          value={amount} 
+          onChangeText={setAmount} 
+          editable={!isAmountLocked} // Lock input if QR code dictated the price
+          autoFocus={!isAmountLocked} 
+        />
+        {isAmountLocked && <Text style={{color: '#10B981', fontSize: 12, marginTop: -12, marginBottom: 16, fontWeight: 'bold'}}>Amount fixed by merchant QR</Text>}
         
         <Text style={styles.label}>PURPOSE (Optional)</Text>
         <TextInput style={styles.input} placeholder="e.g. Dinner split..." placeholderTextColor="#475569" value={reason} onChangeText={setReason} />
@@ -186,7 +221,7 @@ export default function ScannerScreen({ navigation }) {
         
         <TouchableOpacity style={styles.cancelButton} onPress={() => {
           LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-          setScannedUpi(null);
+          setScannedUpiId(null);
         }}>
           <Text style={styles.cancelText}>Cancel & Rescan</Text>
         </TouchableOpacity>
@@ -200,7 +235,7 @@ export default function ScannerScreen({ navigation }) {
         style={StyleSheet.absoluteFillObject}
         facing="back"
         barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-        onBarcodeScanned={scannedUpi ? undefined : handleBarCodeScanned}
+        onBarcodeScanned={scannedUpiId ? undefined : handleBarCodeScanned}
       />
       <View style={styles.overlay}>
         <View style={styles.scannerBox} />

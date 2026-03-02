@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   View, Text, StyleSheet, TouchableOpacity, FlatList, 
   ActivityIndicator, Animated, Dimensions, Alert, Modal, TextInput, 
@@ -32,7 +32,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 const { width } = Dimensions.get('window');
 
 // ⚠️ PASTE YOUR GEMINI API KEY HERE
-const GEMINI_API_KEY = "AIzaSyDgq1MsYJ_eoylSyJ9sWdozu9yYtMNbkZ0"; 
+const GEMINI_API_KEY = "AIzaSyDn3CQWDczkph14EU4kTQpwbeSjqFR944s"; 
 
 const CATEGORIES = [
   'Food & Dining', 'Health & Gym', 'Software/Cloud', 
@@ -89,6 +89,9 @@ export default function DashboardScreen({ navigation }) {
   const [aiResponse, setAiResponse] = useState('');
   const [isAILoading, setIsAILoading] = useState(false);
 
+  // System State for Alerts
+  const hasAlertedOverspend = useRef(false);
+
   const getGreeting = () => {
     const hour = new Date().getHours();
     if (hour < 12) return 'Good Morning';
@@ -112,8 +115,8 @@ export default function DashboardScreen({ navigation }) {
             sound: true,
           },
           trigger: {
-            hour: 8,
-            minute: 44,
+            hour: 20,
+            minute: 0,
             repeats: true,
           },
         });
@@ -224,6 +227,28 @@ export default function DashboardScreen({ navigation }) {
   };
 
   const metrics = userData ? calculateMetrics() : null;
+
+  // --- SMART OVERSPENDING ALGORITHM ---
+  useEffect(() => {
+    if (!metrics || hasAlertedOverspend.current) return;
+    
+    // Calculate a safe daily allowance based on a 30-day view of remaining funds
+    const safeDailyLimit = metrics.safeToSpend / 30;
+    
+    // If burning cash 1.5x faster than allowed (and spent more than ₹100), alert the user
+    if (metrics.dailyBurn > (safeDailyLimit * 1.5) && metrics.dailyBurn > 100) {
+      Notifications.scheduleNotificationAsync({
+        content: {
+          title: "🚨 Overspending Alert!",
+          body: `Your current daily burn of ₹${metrics.dailyBurn} is unsafe. Slow down!`,
+          sound: true, 
+          vibrate: [0, 250, 250, 250],
+        },
+        trigger: null, // null trigger fires immediately
+      });
+      hasAlertedOverspend.current = true; // Prevent notification spam in this session
+    }
+  }, [metrics]);
 
   const getChartData = () => {
     let labels = [];
@@ -377,40 +402,50 @@ export default function DashboardScreen({ navigation }) {
       const promptText = `
         You are a highly intelligent, ruthless, and attention-seeking financial coach embedded in the FinVerse app.
         Here is the user's LIVE financial truth:
-        - Absolute Bank Balance: ₹${metrics.currentBalance}
-        - Safe to Spend (Buffer Included): ₹${metrics.safeToSpend}
-        - Daily Burn Rate: ₹${metrics.dailyBurn} / day.
-        - Survival Runway: ${metrics.runwayDays} days before they go broke.
-        - Worst Financial Habit: Most of their money bleeds into the "${metrics.topCategory}" category.
+        - Absolute Bank Balance: ₹${metrics?.currentBalance || 0}
+        - Safe to Spend (Buffer Included): ₹${metrics?.safeToSpend || 0}
+        - Daily Burn Rate: ₹${metrics?.dailyBurn || 0} / day.
+        - Survival Runway: ${metrics?.runwayDays || 0} days before they go broke.
+        - Worst Financial Habit: Most of their money bleeds into the "${metrics?.topCategory || 'None'}" category.
         
         User Query: "${aiQuery}"
         
         RULES:
         1. Be assertive, engaging, and slightly dramatic.
-        2. Hook their attention immediately (e.g., "Listen to me,", "Are you serious?", "Brilliant move,").
+        2. Hook their attention immediately.
         3. Use their actual data numbers to prove your point.
-        4. Attack or praise their "${metrics.topCategory}" spending habit if relevant.
-        5. Keep it punchy—maximum 3 sentences. No markdown.
+        4. Keep it punchy—maximum 3 sentences. No markdown.
       `;
 
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${GEMINI_API_KEY}`, {
+      // Make sure to paste your NEW API key here!
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: promptText }] }] })
       });
 
       const data = await response.json();
+      
+      // NEW: Let's actually check if Google sent an error back!
+      if (!response.ok) {
+        console.error("GOOGLE API ERROR:", data);
+        setAiResponse(`API Error: ${data.error?.message || 'Unknown server error.'}`);
+        setIsAILoading(false);
+        return;
+      }
+
       if (data.candidates && data.candidates.length > 0) {
         setAiResponse(data.candidates[0].content.parts[0].text);
       } else {
-        setAiResponse("I couldn't process that query. I need a clearer picture of what you want to do.");
+        setAiResponse("I received an empty response. Try rephrasing your question.");
       }
     } catch (error) {
-      setAiResponse("Network connection severed. Check your internet.");
+      console.error("NETWORK ERROR:", error);
+      setAiResponse(`Network Error: ${error.message}. Please check your connection.`);
     }
+    
     setIsAILoading(false);
   };
-
   const onGestureEvent = Animated.event([{ nativeEvent: { translationX: swipeAnimation } }], { useNativeDriver: false });
   const onHandlerStateChange = (event) => {
     if (event.nativeEvent.state === State.END) {
@@ -593,7 +628,7 @@ export default function DashboardScreen({ navigation }) {
       </Modal>
 
       <FlatList
-        data={transactions}
+        data={transactions.slice(0, 4)} // LIMIT TO 4 TRANSACTIONS
         keyExtractor={(item) => item.id}
         renderItem={renderTransaction}
         showsVerticalScrollIndicator={false}
@@ -656,7 +691,7 @@ export default function DashboardScreen({ navigation }) {
             {/* INTERACTIVE ANALYTICS ENGINE */}
             <View style={styles.chartSection}>
               <View style={styles.chartHeader}>
-                <Text style={styles.sectionTitle}>CASH FLOW</Text>
+                <Text style={styles.sectionTitle}>PERFORMANCE</Text>
                 <View style={styles.chartToggles}>
                   {['Week', 'Month', 'Year'].map(period => (
                     <TouchableOpacity key={period} onPress={() => {
@@ -709,6 +744,14 @@ export default function DashboardScreen({ navigation }) {
 
             <Text style={[styles.sectionTitle, { paddingHorizontal: 20, marginTop: 10, marginBottom: 12 }]}>LEDGER</Text>
           </>
+        }
+        ListFooterComponent={
+          transactions.length > 0 ? (
+            <TouchableOpacity style={styles.historyBtn} onPress={() => navigation.navigate('History')}>
+              <Text style={styles.historyBtnText}>Check Full History & Export</Text>
+              <Ionicons name="arrow-forward" size={16} color="#00E5FF" />
+            </TouchableOpacity>
+          ) : null
         }
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
@@ -794,6 +837,9 @@ const styles = StyleSheet.create({
   aiResponseText: { color: '#E2E8F0', fontSize: 14, lineHeight: 22 },
   aiBtn: { backgroundColor: '#00E5FF', padding: 16, borderRadius: 12, alignItems: 'center', marginBottom: 20 },
   aiBtnText: { color: '#0B0F19', fontSize: 16, fontWeight: '900', textTransform: 'uppercase' },
+
+  historyBtn: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', padding: 16, marginHorizontal: 20, marginBottom: 40, marginTop: 10, backgroundColor: '#1E293B', borderRadius: 12, borderWidth: 1, borderColor: '#00E5FF', gap: 8 },
+  historyBtnText: { color: '#00E5FF', fontSize: 14, fontWeight: 'bold', letterSpacing: 1 },
 
   emptyContainer: { alignItems: 'center', marginTop: 40 },
   emptyText: { color: '#475569', marginTop: 12, fontSize: 14, fontWeight: '600' },

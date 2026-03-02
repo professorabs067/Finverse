@@ -19,7 +19,8 @@
         {
           "cameraPermission": "Allow FinVerse to access your camera to scan UPI QR codes."
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "extra": {
       "eas": {
