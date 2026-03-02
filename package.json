@@ -17,6 +17,7 @@
     "expo": "~54.0.33",
     "expo-camera": "~17.0.10",
     "expo-device": "~8.0.10",
+    "expo-firebase-core": "^6.0.0",
     "expo-firebase-recaptcha": "^2.3.1",
     "expo-haptics": "~15.0.8",
     "expo-linear-gradient": "~15.0.8",
