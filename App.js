@@ -19,7 +19,9 @@ import ScannerScreen from './src/screens/ScannerScreen';
 import StatsScreen from './src/screens/StatsScreen';
 import BudgetScreen from './src/screens/BudgetScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
-import HistoryScreen from './src/screens/HistoryScreen'; // <-- NEW: Imported History Screen
+import HistoryScreen from './src/screens/HistoryScreen';
+import LinkAccountScreen from './src/screens/LinkAccountScreen'; // <-- NEW
+import ChildReportScreen from './src/screens/ChildReportScreen'; // <-- NEW
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -96,14 +98,29 @@ export default function App() {
                 }} 
               />
 
-              {/* NEW: History Screen for PDF Exports */}
               <Stack.Screen 
                 name="History" 
                 component={HistoryScreen} 
                 options={{ 
-                  headerShown: false, // Hidden because HistoryScreen has its own custom back button and header
+                  headerShown: false,
                   animation: 'none' 
                 }} 
+              />
+
+              {/* NEW: Parent-Child Link Screens */}
+              <Stack.Screen 
+                name="LinkAccount" 
+                component={LinkAccountScreen} 
+                options={{ headerShown: false ,
+                  animation: 'none' 
+                }} 
+              />
+              <Stack.Screen 
+                name="ChildReport" 
+                component={ChildReportScreen} 
+                options={{ headerShown: false,
+                  animation: 'none' 
+                 }} 
               />
 
             </Stack.Navigator>

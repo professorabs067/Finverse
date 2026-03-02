@@ -23,14 +23,13 @@ export default function ScannerScreen({ navigation }) {
   const [payeeName, setPayeeName] = useState('Unknown Merchant');
   
   const [amount, setAmount] = useState('');
-  const [isAmountLocked, setIsAmountLocked] = useState(false); // NEW: For fixed-price QR codes
+  const [isAmountLocked, setIsAmountLocked] = useState(false);
   const [reason, setReason] = useState('');
   const [category, setCategory] = useState('Transfers');
   const [isSubscription, setIsSubscription] = useState(false);
   
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // --- Supercharged Smart Categorization Engine ---
   useEffect(() => {
     const text = reason.toLowerCase();
     
@@ -57,7 +56,6 @@ export default function ScannerScreen({ navigation }) {
     );
   }
 
-  // Helper function to safely extract URL parameters
   const getUpiParam = (url, paramName) => {
     const regex = new RegExp(`[?&]${paramName}(=([^&#]*)|&|#|$)`);
     const results = regex.exec(url);
@@ -66,18 +64,15 @@ export default function ScannerScreen({ navigation }) {
   };
 
   const handleBarCodeScanned = ({ data }) => {
-    // 1. Validate the protocol
     if (!data || !data.toLowerCase().startsWith('upi://pay')) {
       return Alert.alert('Security Alert', 'Invalid QR code. This is not a recognized UPI format.');
     }
 
     try {
-      // 2. Safely extract parameters
       const extractedPa = getUpiParam(data, 'pa');
       const extractedPn = getUpiParam(data, 'pn');
       const extractedAm = getUpiParam(data, 'am');
       
-      // 3. Strict VPA (UPI ID) Validation
       if (!extractedPa || !extractedPa.includes('@')) {
         return Alert.alert('Security Alert', 'This QR code is missing a valid merchant UPI ID.');
       }
@@ -87,10 +82,9 @@ export default function ScannerScreen({ navigation }) {
       setScannedUpiId(extractedPa);
       setPayeeName(extractedPn || 'Verified Merchant');
 
-      // 4. Handle fixed-amount dynamic QR codes
       if (extractedAm) {
         setAmount(extractedAm);
-        setIsAmountLocked(true); // Prevent user from changing the exact bill amount
+        setIsAmountLocked(true); 
       } else {
         setAmount('');
         setIsAmountLocked(false);
@@ -101,65 +95,88 @@ export default function ScannerScreen({ navigation }) {
     }
   };
 
+  // --- THE NEW SILENT WATERFALL ALGORITHM ---
   const executePayment = async () => {
     if (!amount || isNaN(parseFloat(amount))) return Alert.alert('Error', 'Please enter a valid amount.');
     setIsProcessing(true);
 
     const finalReason = reason || `Paid ${payeeName}`; 
-    // Securely construct the final intent URI using validated state data
-    const finalUrl = `upi://pay?pa=${scannedUpiId}&pn=${encodeURIComponent(payeeName)}&am=${amount}&cu=INR&tn=${encodeURIComponent(finalReason)}`;
+    const transactionRef = 'FV' + Date.now() + Math.floor(Math.random() * 1000);
+
+    // Secure query parameters (includes mode=02 to fix PhonePe ₹2000 limit)
+    const params = `pa=${scannedUpiId}&pn=${encodeURIComponent(payeeName)}&am=${amount}&cu=INR&tn=${encodeURIComponent(finalReason)}&tr=${transactionRef}&mode=02`;
     
-    try {
-      await Linking.openURL(finalUrl);
-      
-      setTimeout(() => {
-        Alert.alert(
-          "Verify Transfer",
-          `Did your transfer of ₹${amount} to ${payeeName} succeed?`,
-          [
-            { 
-              text: "Failed / Cancelled", 
-              style: "cancel", 
-              onPress: () => {
-                setIsProcessing(false);
-                setScannedUpiId(null); 
-              } 
-            },
-            { 
-              text: "Yes, Transfer Successful", 
-              onPress: async () => {
-                try {
-                  await addDoc(collection(db, 'transactions'), {
-                    uid: auth.currentUser.uid,
-                    amount: parseFloat(amount),
-                    payee: payeeName,
-                    reason: finalReason,
-                    category: category, 
-                    isSubscription: isSubscription,
-                    type: 'debit',
-                    timestamp: new Date().toISOString()
-                  });
+    // We create a list of possible app links to try
+    const targetApps = [
+      `upi://pay?${params}`,          // 1. Generic Standard (Works for Android 15)
+      `phonepe://upi/pay?${params}`,  // 2. PhonePe Fallback (Fixes Android 10 bug)
+      `tez://upi/pay?${params}`,      // 3. GPay Fallback
+      `paytmmp://pay?${params}`       // 4. Paytm Fallback
+    ];
 
-                  const userRef = doc(db, 'users', auth.currentUser.uid);
-                  await updateDoc(userRef, {
-                    currentBalance: increment(-parseFloat(amount))
-                  });
+    let successfullyOpened = false;
 
-                  setIsProcessing(false);
-                  navigation.goBack();
-                } catch (dbError) {
-                  Alert.alert('Database Error', 'Could not save the transaction.');
-                  setIsProcessing(false);
-                }
-              } 
-            }
-          ]
-        );
-      }, 1000);
-    } catch (err) {
-      setIsProcessing(false);
-      Alert.alert('Error', 'No UPI payment app found on this device.');
+    // The code will silently loop through the list. If one fails, it instantly tries the next.
+    for (const appUrl of targetApps) {
+      try {
+        await Linking.openURL(appUrl);
+        successfullyOpened = true;
+        break; // If it successfully opens the app, STOP trying the others!
+      } catch (error) {
+        // App not found, loop continues to the next one instantly
+      }
     }
+
+    if (!successfullyOpened) {
+      setIsProcessing(false);
+      return Alert.alert('Error', 'No UPI payment app found. Please install GPay, PhonePe, or Paytm.');
+    }
+
+    // If it worked, set the timeout to verify the transfer
+    setTimeout(() => {
+      Alert.alert(
+        "Verify Transfer",
+        `Did your transfer of ₹${amount} to ${payeeName} succeed?`,
+        [
+          { 
+            text: "Failed / Cancelled", 
+            style: "cancel", 
+            onPress: () => {
+              setIsProcessing(false);
+              setScannedUpiId(null); 
+            } 
+          },
+          { 
+            text: "Yes, Transfer Successful", 
+            onPress: async () => {
+              try {
+                await addDoc(collection(db, 'transactions'), {
+                  uid: auth.currentUser.uid,
+                  amount: parseFloat(amount),
+                  payee: payeeName,
+                  reason: finalReason,
+                  category: category, 
+                  isSubscription: isSubscription,
+                  type: 'debit',
+                  timestamp: new Date().toISOString()
+                });
+
+                const userRef = doc(db, 'users', auth.currentUser.uid);
+                await updateDoc(userRef, {
+                  currentBalance: increment(-parseFloat(amount))
+                });
+
+                setIsProcessing(false);
+                navigation.goBack();
+              } catch (dbError) {
+                Alert.alert('Database Error', 'Could not save the transaction.');
+                setIsProcessing(false);
+              }
+            } 
+          }
+        ]
+      );
+    }, 1500); // Wait 1.5 seconds so the bank app fully opens before showing this alert
   };
 
   if (scannedUpiId) {
@@ -176,7 +193,7 @@ export default function ScannerScreen({ navigation }) {
           placeholderTextColor="#475569" 
           value={amount} 
           onChangeText={setAmount} 
-          editable={!isAmountLocked} // Lock input if QR code dictated the price
+          editable={!isAmountLocked} 
           autoFocus={!isAmountLocked} 
         />
         {isAmountLocked && <Text style={{color: '#10B981', fontSize: 12, marginTop: -12, marginBottom: 16, fontWeight: 'bold'}}>Amount fixed by merchant QR</Text>}
